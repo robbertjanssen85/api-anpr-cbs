@@ -1,0 +1,608 @@
+openapi: 3.0.3
+info:
+  title: CBS ANPR Ingestion API
+  version: 1.0.0
+  description: |
+    Secure ingestion API for Automatic Number Plate Recognition (ANPR) observations
+    and camera metadata from suppliers to Statistics Netherlands (CBS).
+
+    **Privacy-by-design**: transport security with mTLS, OAuth2 client credentials,
+    optional JWE payload encryption, immediate pseudonymization of license plates
+    (CBS-side salted hash), data minimization (no faces/images), strict retention,
+    auditability, and role-based access.
+
+    **Timing and reliability**:
+    - Target latency: 95% within 5 minutes, 99% within 1 hour.
+    - Lateness window: accept events up to 7 days old (beyond this requires agreed backfill job).
+    - Future events: reject if event_time is more than 5 minutes in the future (allowable clock skew).
+    - Idempotency window: 7 days.
+
+    **Note on mTLS + OAuth2**: Both are required for production. The security section models this as an AND requirement.
+
+  termsOfService: https://www.cbs.nl/
+  contact:
+    name: CBS Ingestion Team
+    url: https://www.cbs.nl/
+
+servers:
+  - url: https://ingest.cbs.nl/anpr/v1
+    description: Production
+  - url: https://sandbox.ingest.cbs.nl/anpr/v1
+    description: Sandbox (synthetic data only)
+
+tags:
+  - name: Meta
+  - name: Schemas
+  - name: Cameras
+  - name: Observations
+  - name: Jobs
+
+security:
+  - mtls: []
+    oauth2: [anpr.write]
+
+paths:
+  /status:
+    get:
+      tags: [Meta]
+      summary: Health check
+      operationId: getStatus
+      responses:
+        '200':
+          description: OK
+          headers:
+            Date: { description: RFC 7231 date, schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /jwks:
+    get:
+      tags: [Meta]
+      summary: CBS public keys (JWKS) for verifying JWT/JWE
+      operationId: getJwks
+      responses:
+        '200':
+          description: JWKS
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      description: JSON Web Key (see RFC 7517)
+  /schemas:
+    get:
+      tags: [Schemas]
+      summary: List available data schemas
+      operationId: listSchemas
+      responses:
+        '200':
+          description: Available schema descriptors
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SchemaDescriptor'
+
+  /cameras:
+    post:
+      tags: [Cameras]
+      summary: Register one or more cameras
+      description: |
+        Registers new cameras for a supplier. Camera IDs must be UUID v4. If a camera
+        already exists, use PUT /cameras/{camera_id} to update.
+      operationId: registerCameras
+      security:
+        - mtls: []
+          oauth2: [camera.write]
+      parameters:
+        - $ref: '#/components/parameters/XSupplierId'
+        - $ref: '#/components/parameters/XSchemaVersion'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              items:
+                $ref: '#/components/schemas/Camera'
+            examples:
+              example:
+                value:
+                  - camera_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                    supplier_camera_ref: SUP-0123
+                    location: { lat: 52.0907, lon: 5.1214, crs: EPSG:4326 }
+                    mount_height_m: 6.5
+                    azimuth_deg: 145
+                    tilt_deg: 12
+                    fov_deg: 35
+                    view_polygon_geojson:
+                      type: Polygon
+                      coordinates: [[[5.1210,52.0905],[5.1218,52.0905],[5.1218,52.0910],[5.1210,52.0910],[5.1210,52.0905]]]
+                    active_from: '2025-08-01T00:00:00Z'
+                    privacy_masks_geojson: null
+                    attributes: { lane_count: 2, one_way: true }
+      responses:
+        '201':
+          description: Created
+          headers:
+            RateLimit-Limit: { description: Requests per minute allowed, schema: { type: integer } }
+            RateLimit-Remaining: { description: Requests left in the current window, schema: { type: integer } }
+            RateLimit-Reset: { description: Seconds until reset, schema: { type: integer } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: integer
+                  warnings:
+                    type: array
+                    items: { $ref: '#/components/schemas/Warning' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /cameras/{camera_id}:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    put:
+      tags: [Cameras]
+      summary: Update camera metadata
+      operationId: updateCamera
+      security:
+        - mtls: []
+          oauth2: [camera.write]
+      parameters:
+        - $ref: '#/components/parameters/XSupplierId'
+        - $ref: '#/components/parameters/XSchemaVersion'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Camera'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+    get:
+      tags: [Cameras]
+      summary: Fetch camera metadata
+      operationId: getCamera
+      security:
+        - mtls: []
+          oauth2: [camera.read]
+      responses:
+        '200':
+          description: Camera
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /anpr-reads:
+    post:
+      tags: [Observations]
+      summary: Post a single ANPR observation (low volume/test)
+      description: For production, prefer the bulk endpoint `/anpr-reads:batch`.
+      operationId: postAnprRead
+      parameters:
+        - $ref: '#/components/parameters/XSupplierId'
+        - $ref: '#/components/parameters/XSchemaVersion'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnprObservation'
+            examples:
+              example:
+                value:
+                  observation_id: f9b90f2c-7e1c-4dc4-bb06-9e8a0d1c7f31
+                  camera_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+                  event_time: '2025-09-03T07:12:15.123Z'
+                  device_time: '2025-09-03T07:12:15.100Z'
+                  supplier_dedup_hash: 'a0f55a...'
+                  plate:
+                    country: NL
+                    normalized: NLG123AB
+                  vehicle:
+                    class_hint: N1
+                    direction_deg: 147.2
+                  read_quality:
+                    confidence: 0.96
+                  lane: 1
+                  trigger: motion
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: boolean }
+                  observation_id: { type: string, format: uuid }
+                  errors:
+                    type: array
+                    items: { $ref: '#/components/schemas/ErrorItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /anpr-reads:batch:
+    post:
+      tags: [Observations]
+      summary: Bulk ingest ANPR observations
+      operationId: postAnprReadsBatch
+      parameters:
+        - $ref: '#/components/parameters/XSupplierId'
+        - $ref: '#/components/parameters/XSchemaVersion'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+              description: |
+                NDJSON stream where each line is an AnprObservation object.
+            examples:
+              ndjson:
+                summary: Two observations
+                value: |
+                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:15.123Z","plate":{"country":"NL","normalized":"NLG123AB"},"read_quality":{"confidence":0.96}}
+                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:16.301Z","plate":{"country":"NL","normalized":"NLK456CD"},"read_quality":{"confidence":0.91}}
+          application/json:
+            schema:
+              type: array
+              minItems: 1
+              items:
+                $ref: '#/components/schemas/AnprObservation'
+      responses:
+        '202':
+          description: Accepted for asynchronous validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '207':
+          description: Partial success (synchronous validation summary)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /ingest/jobs/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/JobId'
+    get:
+      tags: [Jobs]
+      summary: Get bulk ingest job status
+      operationId: getIngestJob
+      parameters:
+        - $ref: '#/components/parameters/XSupplierId'
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+      description: Mutual TLS using supplier client certificates. Enforced at the edge.
+    oauth2:
+      type: oauth2
+      description: OAuth 2.1 Client Credentials using private_key_jwt; tokens are mTLS-bound.
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.cbs.nl/oauth2/token
+          scopes:
+            anpr.write: Write ANPR observations
+            camera.write: Register/update cameras
+            camera.read: Read camera metadata
+            schemas.read: Read schema descriptors
+            jobs.read: Read job statuses
+
+  parameters:
+    CameraId:
+      name: camera_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: Registered camera UUID.
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Server-issued job identifier.
+    XSupplierId:
+      name: X-Supplier-Id
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: Supplier tenant UUID issued by CBS.
+    XSchemaVersion:
+      name: X-Schema-Version
+      in: header
+      required: false
+      schema: { type: string, default: anpr-1.0.0 }
+      description: Payload schema version indicator.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: Unique key to deduplicate requests within a 7-day window.
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: Conflict (duplicate or state violation)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    PayloadTooLarge:
+      description: Payload too large
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UnsupportedMediaType:
+      description: Unsupported media type
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UnprocessableEntity:
+      description: Domain validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TooManyRequests:
+      description: Too many requests
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ServerError:
+      description: Server error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    Status:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        time: { type: string, format: date-time }
+        version: { type: string }
+
+    SchemaDescriptor:
+      type: object
+      properties:
+        name: { type: string, example: AnprObservation }
+        version: { type: string, example: anpr-1.0.0 }
+        jsonSchema: { type: object, description: Inline JSON Schema for convenience }
+
+    Camera:
+      type: object
+      required: [camera_id, location]
+      properties:
+        camera_id: { type: string, format: uuid }
+        supplier_camera_ref: { type: string, nullable: true }
+        location:
+          type: object
+          required: [lat, lon]
+          properties:
+            lat: { type: number, minimum: -90, maximum: 90 }
+            lon: { type: number, minimum: -180, maximum: 180 }
+            crs: { type: string, default: EPSG:4326, description: 'Coordinate reference system (EPSG:4326 or EPSG:28992)' }
+        mount_height_m: { type: number, minimum: 0, nullable: true }
+        azimuth_deg: { type: number, minimum: 0, maximum: 360, nullable: true }
+        tilt_deg: { type: number, minimum: -90, maximum: 90, nullable: true }
+        fov_deg: { type: number, minimum: 0, maximum: 180, nullable: true }
+        view_polygon_geojson:
+          type: object
+          nullable: true
+          description: Valid GeoJSON Polygon (WGS-84) describing approximate field-of-view.
+        privacy_masks_geojson:
+          type: object
+          nullable: true
+          description: GeoJSON polygons to exclude from processing.
+        active_from: { type: string, format: date-time, nullable: true }
+        active_to: { type: string, format: date-time, nullable: true }
+        attributes:
+          type: object
+          additionalProperties: true
+          description: Vendor-specific attributes (e.g., lane_count, one_way).
+
+    Plate:
+      type: object
+      required: [country]
+      properties:
+        country: { type: string, description: ISO 3166-1 alpha-2 country code }
+        raw: { type: string, nullable: true, description: OPTIONAL when JWE or trusted channel is used }
+        normalized: { type: string, nullable: true, description: Supplier-normalized string (uppercase, no spaces/dashes, prefixed with country if agreed) }
+
+    ReadQuality:
+      type: object
+      properties:
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        char_confidence_min: { type: number, minimum: 0, maximum: 1, nullable: true }
+
+    VehicleHint:
+      type: object
+      properties:
+        axles: { type: integer, minimum: 1, nullable: true }
+        class_hint: { type: string, nullable: true, description: UNECE classes such as N1/N2/N3/M1 }
+        direction_deg: { type: number, minimum: 0, maximum: 360, nullable: true }
+
+    AnprObservation:
+      type: object
+      required: [observation_id, camera_id, event_time, plate]
+      properties:
+        observation_id: { type: string, format: uuid }
+        camera_id: { type: string, format: uuid }
+        event_time: { type: string, format: date-time, description: UTC ISO 8601 (RFC3339) with milliseconds }
+        device_time: { type: string, format: date-time, nullable: true }
+        supplier_dedup_hash: { type: string, nullable: true, description: HMAC-SHA256 over normalized plate for supplier-side dedup }
+        plate: { $ref: '#/components/schemas/Plate' }
+        vehicle: { $ref: '#/components/schemas/VehicleHint' }
+        read_quality: { $ref: '#/components/schemas/ReadQuality' }
+        lane: { type: integer, minimum: 0, nullable: true }
+        trigger: { type: string, nullable: true, enum: [motion, loop, radar, other] }
+        notes: { type: string, nullable: true }
+        extensions:
+          type: object
+          additionalProperties: true
+          description: Vendor-specific namespaced keys.
+
+    JobAccepted:
+      type: object
+      properties:
+        job_id: { type: string }
+        status: { type: string, enum: [queued, validating, accepted, partial, failed] }
+
+    BulkResult:
+      type: object
+      properties:
+        received: { type: integer }
+        accepted: { type: integer }
+        rejected: { type: integer }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/ErrorItem' }
+
+    JobStatus:
+      type: object
+      properties:
+        job_id: { type: string }
+        status: { type: string, enum: [queued, validating, accepted, partial, failed] }
+        received: { type: integer, nullable: true }
+        accepted: { type: integer, nullable: true }
+        rejected: { type: integer, nullable: true }
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorItem'
+
+    Warning:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+    ErrorItem:
+      type: object
+      properties:
+        code: { type: string, example: INVALID_TIME }
+        detail: { type: string }
+        line: { type: integer, nullable: true, description: NDJSON line number when applicable }
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            hint: { type: string, nullable: true }
+            trace_id: { type: string, nullable: true }
+
+x-cbs-policies:
+  privacy:
+    - Raw license plates (if ever received) are ephemeral and removed within 24 hours unless a legal basis for QC retention exists.
+    - CBS computes plate_hash_cbs = SHA-256(normalized_plate + HSM-held global pepper) and discards raw.
+  security:
+    - TLS 1.3 with mutual TLS is mandatory. HSTS enabled.
+    - OAuth 2.1 client credentials flow using private_key_jwt. Tokens are bound to the mTLS session.
+    - Optional JWE body encryption using CBS public keys (rotated via /jwks).
+  timing:
+    - Clock skew allowed ±2 seconds. NTP/PTP recommended on supplier devices.
+    - Late data accepted up to 7 days; older data requires a backfill job agreement.
+  rateLimits:
+    default:
+      rpm: 1000
+      burst: 5000
+      headers: [RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset]
