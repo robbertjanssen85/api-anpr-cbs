@@ -4,11 +4,10 @@ info:
   version: 0.1.0
   description: |
     Secure ingestion API for Automatic Number Plate Recognition (ANPR) observations
-    and camera metadata from suppliers to VESDI platform of CBS.
+    and camera metadata from suppliers to VESDI ecosystem partners.
 
     **Privacy-by-design**: transport security with mTLS, OAuth2 client credentials,
-    optional JWE payload encryption, immediate pseudonymization of license plates
-    (VESDI-side salted hash), data minimization (no faces/images), strict retention,
+    optional JWE payload encryption, data minimization (no faces/images), strict retention,
     auditability, and role-based access.
 
     **Timing and reliability**:
@@ -27,13 +26,13 @@ info:
   termsOfService: https://www.CBS.nl/
   contact:
     name: VESDI Ingestion Team
-    url: https://www.cbs.nl/nl-nl/dossier/vesdi
-    mail: vesdi@cbs.nl
+    url: https://www.vesdi.nl/
+    mail: vesdi@vesdi.nl
 
 servers:
-  - url: https://ingest.cbs.nl/anpr/v1
+  - url: https://ingest.vesdi.nl/anpr/v1
     description: Production
-  - url: https://sandbox.ingest.cbs.nl/anpr/v1
+  - url: https://sandbox.ingest.vesdi.nl/anpr/v1
     description: Sandbox (synthetic data only)
 
 tags:
@@ -65,7 +64,7 @@ paths:
   /jwks:
     get:
       tags: [Meta]
-      summary: CBS public keys (JWKS) for verifying JWT/JWE
+      summary: VESDI public keys (JWKS) for verifying JWT/JWE
       operationId: getJwks
       responses:
         '200':
@@ -244,8 +243,8 @@ paths:
                   device_time: '2025-09-03T07:12:15.100Z'
                   supplier_dedup_hash: 'a0f55a...'
                   plate:
+                    license_plate: 'NL-G-123-AB'
                     country: NL
-                    normalized: NLG123AB
                   vehicle:
                     class_hint: N1
                     direction_deg: 147.2
@@ -297,8 +296,8 @@ paths:
               ndjson:
                 summary: Two observations
                 value: |
-                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:15.123Z","plate":{"country":"NL","normalized":"NLG123AB"},"read_quality":{"confidence":0.96}}
-                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:16.301Z","plate":{"country":"NL","normalized":"NLK456CD"},"read_quality":{"confidence":0.91}}
+                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:15.123Z","plate":{"license_plate":"NL-G-123-AB","country":"NL"},"read_quality":{"confidence":0.96}}
+                  {"observation_id":"...","camera_id":"...","event_time":"2025-09-03T07:12:16.301Z","plate":{"license_plate":"NL-K-456-CD","country":"NL"},"read_quality":{"confidence":0.91}}
           application/json:
             schema:
               type: array
@@ -359,7 +358,7 @@ components:
       description: OAuth 2.1 Client Credentials using private_key_jwt; tokens are mTLS-bound.
       flows:
         clientCredentials:
-          tokenUrl: https://auth.cbs.nl/oauth2/token
+          tokenUrl: https://auth.vesdi.nl/oauth2/token
           scopes:
             anpr.write: Write ANPR observations
             camera.write: Register/update cameras
@@ -385,7 +384,7 @@ components:
       in: header
       required: true
       schema: { type: string, format: uuid }
-      description: Supplier tenant UUID issued by CBS/VESDI.
+      description: Supplier tenant UUID issued by VESDI.
     XSchemaVersion:
       name: X-Schema-Version
       in: header
@@ -504,11 +503,10 @@ components:
 
     Plate:
       type: object
-      required: [country]
+      required: [license_plate]
       properties:
-        country: { type: string, description: ISO 3166-1 alpha-2 country code }
-        raw: { type: string, nullable: true, description: OPTIONAL when JWE or trusted channel is used }
-        normalized: { type: string, nullable: true, description: Supplier-normalized string (uppercase, no spaces/dashes, prefixed with country if agreed) }
+        license_plate: { type: string, description: Raw license plate as captured by ANPR camera }
+        country: { type: string, nullable: true, description: ISO 3166-1 alpha-2 country code (optional, VESDI can determine from plate format) }
 
     ReadQuality:
       type: object
@@ -531,7 +529,7 @@ components:
         camera_id: { type: string, format: uuid }
         event_time: { type: string, format: date-time, description: UTC ISO 8601 (RFC3339) with milliseconds }
         device_time: { type: string, format: date-time, nullable: true }
-        supplier_dedup_hash: { type: string, nullable: true, description: HMAC-SHA256 over normalized plate for supplier-side dedup }
+        supplier_dedup_hash: { type: string, nullable: true, description: Optional supplier-side deduplication hash }
         plate: { $ref: '#/components/schemas/Plate' }
         vehicle: { $ref: '#/components/schemas/VehicleHint' }
         read_quality: { $ref: '#/components/schemas/ReadQuality' }
@@ -596,14 +594,14 @@ components:
             hint: { type: string, nullable: true }
             trace_id: { type: string, nullable: true }
 
-x-cbs-policies:
+x-vesdi-policies:
   privacy:
-    - Raw license plates are ephemeral and removed within 24 hours unless a legal basis for QC retention exists.
-    - CBS computes plate_hash_vesdi = SHA-256(normalized_plate + HSM-held global pepper) and discards raw.
+    - License plates are stored and processed according to VESDI privacy policies and GDPR requirements.
+    - Data retention follows legal requirements and agreed retention periods.
   security:
     - TLS 1.3 with mutual TLS is mandatory. HSTS enabled.
     - OAuth 2.1 client credentials flow using private_key_jwt. Tokens are bound to the mTLS session.
-    - Optional JWE body encryption using CBS public keys (rotated via /jwks).
+    - Optional JWE body encryption using VESDI public keys (rotated via /jwks).
   timing:
     - Clock skew allowed ±2 seconds. NTP/PTP recommended on supplier devices.
     - Late data accepted up to 7 days; older data requires a backfill job agreement.
