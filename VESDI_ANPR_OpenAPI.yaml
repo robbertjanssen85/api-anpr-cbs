@@ -7,8 +7,7 @@ info:
     and camera metadata from suppliers to VESDI platform of CBS.
 
     **Privacy-by-design**: transport security with mTLS, OAuth2 client credentials,
-    optional JWE payload encryption, immediate pseudonymization of license plates
-    (VESDI-side salted hash), data minimization (no faces/images), strict retention,
+    data minimization (limited data items), strict retention,
     auditability, and role-based access.
 
     **Timing and reliability**:
@@ -19,21 +18,21 @@ info:
 
     **Backend considerations**:
     - An average of 63.000 daily ANPR-detections took place in Utrecht in 2023 - use the following message size as an indication of payloads and traffic (not considering network overhead)
-    - Full (enriched) uncompressed CSV-payload with 31 dataitems is about about 250 bytes per row, 15 MB/day, 450 MB/month
-    - A minimal not-enriched GZIP-compressed JSON-payload with 6 dataitems is about 15 bytes per messages, 0.9 MB/day, 28 MB/month
+      - Full (enriched) uncompressed CSV-payload with 31 dataitems is about about 250 bytes per row, 15 MB/day, 450 MB/month
+      - A minimal not-enriched GZIP-compressed JSON-payload with 6 dataitems is about 15 bytes per messages, 0.9 MB/day, 28 MB/month, which is preferred for this API
     
-    **Note on mTLS + OAuth2**: Both are required for production. The security section models this as an AND requirement.
+    **Note on mTLS + OAuth2**: also iShare authentication could perhaps be implemented. To be investigated.
 
-  termsOfService: https://www.CBS.nl/
+  termsOfService: https://www.CBS.nl/ #placeholder
   contact:
-    name: VESDI Ingestion Team
+    name: VESDI Ingestion Team #placeholder
     url: https://www.cbs.nl/nl-nl/dossier/vesdi
     mail: vesdi@cbs.nl
 
 servers:
-  - url: https://ingest.cbs.nl/anpr/v1
+  - url: https://ingest.cbs.nl/anpr/v1 #placeholder
     description: Production
-  - url: https://sandbox.ingest.cbs.nl/anpr/v1
+  - url: https://sandbox.ingest.cbs.nl/anpr/v1 #placeholder
     description: Sandbox (synthetic data only)
 
 tags:
@@ -245,14 +244,11 @@ paths:
                   supplier_dedup_hash: 'a0f55a...'
                   plate:
                     country: NL
-                    normalized: NLG123AB
-                  vehicle:
-                    class_hint: N1
-                    direction_deg: 147.2
+                    licenseplate: NLG123AB
                   read_quality:
                     confidence: 0.96
                   lane: 1
-                  trigger: motion
+                  
       responses:
         '201':
           description: Created
